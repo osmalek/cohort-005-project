@@ -4,6 +4,7 @@ import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import * as schema from "~/db/schema";
 import {
   NotificationKind,
+  RefundStatus,
   comments,
   courses,
   lessons,
@@ -191,6 +192,34 @@ export function notifyCommentDeleted(
 }
 
 /**
+ * Called by the Refund Request decision paths, inside their transaction, once
+ * a Platform Admin approves or declines. Tells the buyer on the Purchase
+ * (`refund_decided`); the decision and its note are read from the refund row.
+ */
+export function notifyRefundDecided(
+  tx: Queryable,
+  refund: {
+    id: number;
+    buyerId: number;
+    courseId: number;
+    platformAdminId: number;
+  },
+  now: Date
+): void {
+  createNotification(
+    tx,
+    {
+      recipientId: refund.buyerId,
+      kind: NotificationKind.RefundDecided,
+      actorId: refund.platformAdminId,
+      courseId: refund.courseId,
+      refundId: refund.id,
+    },
+    now
+  );
+}
+
+/**
  * Called by the lesson write path, inside its transaction, for every new
  * lesson. In a Published course, each Student with a current Enrollment gets
  * a `new_lesson` Notification. Lapsed Students have no Enrollment row, so
@@ -286,6 +315,16 @@ function present(row: PresentableRow): { text: string; href: string } {
         text: `${name} asked a question on ${lesson}.`,
         href: `/instructor/questions#question-${n.commentId}`,
       };
+    case NotificationKind.RefundDecided: {
+      const course = row.courseTitle ?? "your course";
+      return {
+        text:
+          row.refundStatus === RefundStatus.Declined
+            ? `Your refund request for ${course} was declined: ${row.refundNote}.`
+            : `Your refund request for ${course} was approved. Your access has ended.`,
+        href: `/courses/${row.courseSlug}#refund-${n.refundId}`,
+      };
+    }
     case NotificationKind.NewLesson:
       return {
         text: `New lesson in ${row.courseTitle ?? "a course"}: ${lesson}.`,

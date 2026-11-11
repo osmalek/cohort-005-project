@@ -7,6 +7,7 @@ import {
   approveRefundRequest,
   checkRefundRequest,
   declineRefundRequest,
+  getLatestRefundRequestForCourse,
   getRefundOffer,
   getSeatAvailability,
   listRefundRequestsForBuyer,
@@ -14,6 +15,11 @@ import {
   listTeamLicences,
   raiseRefundRequest,
 } from "./refunds.server";
+import {
+  countUnreadNotifications,
+  listUnreadNotifications,
+  markNotificationRead,
+} from "./notifications.server";
 
 type TestDb = ReturnType<typeof createTestDb>;
 
@@ -254,6 +260,32 @@ describe("the refund offer on the course page", () => {
     approveRefundRequest(db, id, platformAdmin.id, null, NOW);
 
     expect(getRefundOffer(db, base.user.id, base.course.id, NOW)).toBeNull();
+  });
+});
+
+describe("the refund status on the course page", () => {
+  it("shows the buyer's newest Refund Request for the course with its note", () => {
+    const purchase = buyForSelf(base.user.id);
+    const first = raise(purchase.id, base.user.id);
+    declineRefundRequest(db, first, platformAdmin.id, "Past half way.", NOW);
+    const second = raise(purchase.id, base.user.id);
+    approveRefundRequest(db, second, platformAdmin.id, "Sorry it did not fit.", NOW);
+
+    expect(
+      getLatestRefundRequestForCourse(db, base.user.id, base.course.id)
+    ).toEqual({
+      id: second,
+      status: RefundStatus.Approved,
+      decisionNote: "Sorry it did not fit.",
+    });
+  });
+
+  it("shows nothing to someone with no Refund Request", () => {
+    buyForSelf(base.user.id);
+
+    expect(
+      getLatestRefundRequestForCourse(db, base.user.id, base.course.id)
+    ).toBeNull();
   });
 });
 
@@ -500,5 +532,95 @@ describe("listing Refund Requests", () => {
       { seatCount: 2, claimedSeatCount: 1, canRequestRefund: false },
       { seatCount: 2, claimedSeatCount: 0, canRequestRefund: true },
     ]);
+  });
+});
+
+describe("refund_decided Notifications", () => {
+  it("tells the buyer their refund request was approved", () => {
+    const purchase = buyForSelf(base.user.id);
+    const id = raise(purchase.id, base.user.id);
+
+    approveRefundRequest(db, id, platformAdmin.id, null, NOW);
+
+    expect(listUnreadNotifications(db, base.user.id)).toEqual([
+      {
+        id: expect.any(Number),
+        kind: "refund_decided",
+        text: "Your refund request for Test Course was approved. Your access has ended.",
+        href: `/courses/test-course#refund-${id}`,
+        createdAt: NOW.toISOString(),
+        readAt: null,
+      },
+    ]);
+  });
+
+  it("tells the buyer their refund request was declined, with the note", () => {
+    const purchase = buyForSelf(base.user.id);
+    const id = raise(purchase.id, base.user.id);
+
+    declineRefundRequest(db, id, platformAdmin.id, "  You finished the course ", NOW);
+
+    expect(listUnreadNotifications(db, base.user.id)).toMatchObject([
+      {
+        kind: "refund_decided",
+        text: "Your refund request for Test Course was declined: You finished the course.",
+        href: `/courses/test-course#refund-${id}`,
+        readAt: null,
+      },
+    ]);
+  });
+
+  it("tells the Team Admin who bought a Team Licence", () => {
+    const priya = addLearner("Priya");
+    const { purchase } = buySeats(priya.id, 2);
+    const id = raise(purchase.id, priya.id);
+
+    approveRefundRequest(db, id, platformAdmin.id, null, NOW);
+
+    expect(listUnreadNotifications(db, priya.id)).toMatchObject([
+      { kind: "refund_decided", href: `/courses/test-course#refund-${id}` },
+    ]);
+    expect(countUnreadNotifications(db, platformAdmin.id)).toBe(0);
+  });
+
+  it("creates nothing when the approval is refused", () => {
+    const priya = addLearner("Priya");
+    const { purchase, seats } = buySeats(priya.id, 2);
+    const id = raise(purchase.id, priya.id);
+    claimSeat(seats[0].id, addLearner("Ben").id);
+
+    expect(approveRefundRequest(db, id, platformAdmin.id, null, NOW).ok).toBe(false);
+    expect(countUnreadNotifications(db, priya.id)).toBe(0);
+  });
+
+  it("creates nothing when a decline has no note", () => {
+    const purchase = buyForSelf(base.user.id);
+    const id = raise(purchase.id, base.user.id);
+
+    expect(declineRefundRequest(db, id, platformAdmin.id, " ", NOW).ok).toBe(false);
+    expect(countUnreadNotifications(db, base.user.id)).toBe(0);
+  });
+
+  it("notifies once: a later decision on the same request creates nothing", () => {
+    const purchase = buyForSelf(base.user.id);
+    const id = raise(purchase.id, base.user.id);
+    approveRefundRequest(db, id, platformAdmin.id, null, NOW);
+
+    declineRefundRequest(db, id, platformAdmin.id, "Too late.", NOW);
+    approveRefundRequest(db, id, platformAdmin.id, null, NOW);
+
+    expect(countUnreadNotifications(db, base.user.id)).toBe(1);
+  });
+
+  it("opens the refund's status on the course page and is then read", () => {
+    const purchase = buyForSelf(base.user.id);
+    const id = raise(purchase.id, base.user.id);
+    declineRefundRequest(db, id, platformAdmin.id, "Past half way.", NOW);
+    const [notification] = listUnreadNotifications(db, base.user.id);
+
+    expect(markNotificationRead(db, base.user.id, notification.id, NOW)).toBe(
+      `/courses/test-course#refund-${id}`
+    );
+    expect(countUnreadNotifications(db, base.user.id)).toBe(0);
   });
 });
