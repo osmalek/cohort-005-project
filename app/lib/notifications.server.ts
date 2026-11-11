@@ -1,4 +1,4 @@
-import { and, count, desc, eq, isNull } from "drizzle-orm";
+import { and, count, desc, eq, isNull, lt } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import * as schema from "~/db/schema";
@@ -233,4 +233,25 @@ export function markNotificationRead(
       .run();
   }
   return present(row).href;
+}
+
+// ─── Pruning ───
+
+/** How long a read Notification is kept after it was read. */
+export const READ_NOTIFICATION_RETENTION_DAYS = 90;
+
+/**
+ * Deletes Notifications read more than 90 days before `now`. Unread ones are
+ * kept however old, cleared or not: only reading starts the clock. There is no
+ * scheduler, so this runs lazily from the bell's endpoint. Returns how many
+ * were deleted.
+ */
+export function pruneReadNotifications(db: Queryable, now: Date): number {
+  const cutoff = new Date(
+    now.getTime() - READ_NOTIFICATION_RETENTION_DAYS * 24 * 60 * 60 * 1000
+  );
+  return db
+    .delete(notifications)
+    .where(lt(notifications.readAt, cutoff.toISOString()))
+    .run().changes;
 }
