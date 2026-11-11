@@ -8,6 +8,7 @@ import {
   type ClearTarget,
 } from "~/lib/notification-groups";
 import type { NotificationView } from "~/lib/notifications.server";
+import { useUnreadNotificationCount } from "~/hooks/use-unread-notification-count";
 
 // The bell's panel (Variant C of the prototype): unread Notifications grouped
 // by kind, each group with its own Clear, a Clear all, and a collapsed
@@ -49,11 +50,15 @@ function NotificationRow({
   onOpen: () => void;
 }) {
   const fetcher = useFetcher();
+  const live = useUnreadNotificationCount();
   return (
     <fetcher.Form
       method="post"
       action={NOTIFICATIONS_ENDPOINT}
-      onSubmit={onOpen}
+      onSubmit={() => {
+        if (!notification.readAt) live?.adjust(-1);
+        onOpen();
+      }}
     >
       <input type="hidden" name="intent" value="mark-read" />
       <input type="hidden" name="notificationId" value={notification.id} />
@@ -74,19 +79,33 @@ function NotificationRow({
   );
 }
 
-/** A "Clear" button that hides one group, or everything, from the bell. */
+/**
+ * A "Clear" button that hides one group, or everything, from the bell. The
+ * live count drops at once; the next poll reconciles it.
+ */
 function ClearButton({
   target,
+  count,
   label,
   className,
 }: {
   target: ClearTarget;
+  /** How many unread Notifications this clears. */
+  count: number;
   label: string;
   className?: string;
 }) {
   const fetcher = useFetcher();
+  const live = useUnreadNotificationCount();
   return (
-    <fetcher.Form method="post" action={NOTIFICATIONS_ENDPOINT}>
+    <fetcher.Form
+      method="post"
+      action={NOTIFICATIONS_ENDPOINT}
+      onSubmit={() => {
+        if (target === "all") live?.set(0);
+        else live?.adjust(-count);
+      }}
+    >
       <input type="hidden" name="intent" value="clear" />
       <input type="hidden" name="target" value={target} />
       <button
@@ -121,6 +140,7 @@ export function NotificationPanel({
         {unread.length > 0 && (
           <ClearButton
             target="all"
+            count={unread.length}
             label="Clear all"
             className="font-medium text-primary hover:underline"
           />
@@ -152,6 +172,7 @@ export function NotificationPanel({
                   </span>
                   <ClearButton
                     target={group.key}
+                    count={items.length}
                     label="Clear"
                     className="text-muted-foreground hover:text-foreground"
                   />

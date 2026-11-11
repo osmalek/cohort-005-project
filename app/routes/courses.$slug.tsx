@@ -15,9 +15,14 @@ import {
   lessonProgress,
   courseRatings,
   LessonProgressStatus,
+  RefundStatus,
 } from "~/db/schema";
 import { eq, and, or, sql } from "drizzle-orm";
-import { getRefundOffer, type RefundOffer } from "~/lib/refunds.server";
+import {
+  getLatestRefundRequestForCourse,
+  getRefundOffer,
+  type RefundOffer,
+} from "~/lib/refunds.server";
 import { Card, CardContent, CardHeader } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
@@ -395,9 +400,17 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   let lessonProgressMap: Record<number, string> = {};
   let nextLessonId: number | null = null;
   let refundOffer: RefundOffer | null = null;
+  let refundRequest: ReturnType<typeof getLatestRefundRequestForCourse> = null;
 
   if (currentUserId) {
     enrolled = isUserEnrolled(currentUserId, course.id);
+    // Shown whether or not the buyer is still enrolled: an approved refund
+    // ends the Enrollment, and a refund_decided Notification links here.
+    refundRequest = getLatestRefundRequestForCourse(
+      db,
+      currentUserId,
+      course.id
+    );
 
     if (enrolled) {
       refundOffer = getRefundOffer(db, currentUserId, course.id, new Date());
@@ -445,6 +458,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     ratingSummary,
     userRating,
     refundOffer,
+    refundRequest,
   };
 }
 
@@ -546,6 +560,7 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
     ratingSummary,
     userRating,
     refundOffer,
+    refundRequest,
   } = loaderData;
   const isInstructor = currentUserId === course.instructorId;
   const [searchParams, setSearchParams] = useSearchParams();
@@ -728,6 +743,7 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
 
         {/* Right column: progress/enrollment card */}
         <div className="space-y-6">
+          {refundRequest && <RefundStatusCard refundRequest={refundRequest} />}
           <Card className="sticky top-6">
             <CardHeader>
               <h2 className="text-lg font-semibold">
@@ -822,6 +838,39 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
         </div>
       </div>
     </div>
+  );
+}
+
+const REFUND_STATUS_TEXT: Record<RefundStatus, string> = {
+  [RefundStatus.Open]: "Your refund request is waiting on us.",
+  [RefundStatus.Approved]: "Your refund request was approved.",
+  [RefundStatus.Declined]: "Your refund request was declined.",
+};
+
+function RefundStatusCard({
+  refundRequest,
+}: {
+  refundRequest: {
+    id: number;
+    status: RefundStatus;
+    decisionNote: string | null;
+  };
+}) {
+  return (
+    <Card id={`refund-${refundRequest.id}`} className="scroll-mt-20">
+      <CardHeader>
+        <h2 className="text-lg font-semibold">Refund request</h2>
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        <p>{REFUND_STATUS_TEXT[refundRequest.status]}</p>
+        {refundRequest.decisionNote && (
+          <p className="rounded-md bg-muted p-2">
+            <span className="font-medium">Our note: </span>
+            {refundRequest.decisionNote}
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
