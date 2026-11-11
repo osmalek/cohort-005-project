@@ -23,6 +23,7 @@ import {
   REFUND_WINDOW_DAYS,
   type RuleBreak,
 } from "~/lib/refund-rules";
+import { notifyRefundDecided } from "~/lib/notifications.server";
 
 // ─── Refunds ───
 // Everything about Refund Requests: whether a Purchase may be refunded, raising
@@ -524,6 +525,33 @@ export function listRefundRequestsForBuyer(db: Queryable, buyerId: number) {
     }));
 }
 
+/**
+ * The buyer's newest Refund Request on any of their Purchases of a course, for
+ * the refund status on the course page (where a `refund_decided` Notification
+ * links to).
+ */
+export function getLatestRefundRequestForCourse(
+  db: Queryable,
+  buyerId: number,
+  courseId: number
+): { id: number; status: RefundStatus; decisionNote: string | null } | null {
+  return (
+    db
+      .select({
+        id: refunds.id,
+        status: refunds.status,
+        decisionNote: refunds.decisionNote,
+      })
+      .from(refunds)
+      .innerJoin(purchases, eq(refunds.purchaseId, purchases.id))
+      .where(
+        and(eq(purchases.userId, buyerId), eq(purchases.courseId, courseId))
+      )
+      .orderBy(desc(refunds.requestedAt), desc(refunds.id))
+      .get() ?? null
+  );
+}
+
 /** A Team Admin's Team Licences, with what the team page needs to refund one. */
 export function listTeamLicences(db: Queryable, buyerId: number, now: Date) {
   const bought = db
@@ -677,6 +705,17 @@ export function approveRefundRequest(
       .where(eq(refunds.id, refundRequestId))
       .run();
 
+    notifyRefundDecided(
+      tx,
+      {
+        id: refundRequestId,
+        buyerId: purchase.userId,
+        courseId: purchase.courseId,
+        platformAdminId,
+      },
+      now
+    );
+
     return {
       ok: true,
       email: buildDecisionEmail(tx, purchase, RefundStatus.Approved, note),
@@ -719,6 +758,17 @@ export function declineRefundRequest(
       })
       .where(eq(refunds.id, refundRequestId))
       .run();
+
+    notifyRefundDecided(
+      tx,
+      {
+        id: refundRequestId,
+        buyerId: found.purchase.userId,
+        courseId: found.purchase.courseId,
+        platformAdminId,
+      },
+      now
+    );
 
     return {
       ok: true,
