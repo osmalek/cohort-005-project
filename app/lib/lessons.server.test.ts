@@ -54,6 +54,7 @@ describe("new_lesson Notifications", () => {
         href: `/courses/test-course/lessons/${lesson.id}`,
         createdAt: NOW.toISOString(),
         readAt: null,
+        hiddenAt: null,
       },
     ]);
     expect(countUnreadNotifications(db, base.instructor.id)).toBe(0);

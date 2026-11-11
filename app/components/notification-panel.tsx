@@ -5,6 +5,7 @@ import { cn } from "~/lib/utils";
 import { NotificationKind } from "~/db/schema";
 import {
   NOTIFICATION_GROUPS,
+  isOnBell,
   type ClearTarget,
 } from "~/lib/notification-groups";
 import type { NotificationView } from "~/lib/notifications.server";
@@ -56,7 +57,7 @@ function NotificationRow({
       method="post"
       action={NOTIFICATIONS_ENDPOINT}
       onSubmit={() => {
-        if (!notification.readAt) live?.adjust(-1);
+        if (isOnBell(notification)) live?.adjust(-1);
         onOpen();
       }}
     >
@@ -161,8 +162,7 @@ export function NotificationPanel({
           )}
 
           {NOTIFICATION_GROUPS.map((group) => {
-            const kinds: readonly NotificationKind[] = group.kinds;
-            const items = unread.filter((n) => kinds.includes(n.kind));
+            const items = unread.filter((n) => group.kinds.includes(n.kind));
             if (items.length === 0) return null;
             return (
               <section key={group.key} aria-label={group.label} className="mb-1">

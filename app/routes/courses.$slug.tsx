@@ -19,9 +19,10 @@ import {
 } from "~/db/schema";
 import { eq, and, or, sql } from "drizzle-orm";
 import {
-  getLatestRefundRequestForCourse,
   getRefundOffer,
+  listRefundRequestsForCourse,
   type RefundOffer,
+  type RefundRequestStatus,
 } from "~/lib/refunds.server";
 import { Card, CardContent, CardHeader } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
@@ -400,17 +401,15 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   let lessonProgressMap: Record<number, string> = {};
   let nextLessonId: number | null = null;
   let refundOffer: RefundOffer | null = null;
-  let refundRequest: ReturnType<typeof getLatestRefundRequestForCourse> = null;
+  let refundRequests: RefundRequestStatus[] = [];
 
   if (currentUserId) {
     enrolled = isUserEnrolled(currentUserId, course.id);
     // Shown whether or not the buyer is still enrolled: an approved refund
     // ends the Enrollment, and a refund_decided Notification links here.
-    refundRequest = getLatestRefundRequestForCourse(
-      db,
-      currentUserId,
-      course.id
-    );
+    // Every request, not just the newest, so each Notification's
+    // #refund-<id> anchor lands on its own entry.
+    refundRequests = listRefundRequestsForCourse(db, currentUserId, course.id);
 
     if (enrolled) {
       refundOffer = getRefundOffer(db, currentUserId, course.id, new Date());
@@ -458,7 +457,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     ratingSummary,
     userRating,
     refundOffer,
-    refundRequest,
+    refundRequests,
   };
 }
 
@@ -560,7 +559,7 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
     ratingSummary,
     userRating,
     refundOffer,
-    refundRequest,
+    refundRequests,
   } = loaderData;
   const isInstructor = currentUserId === course.instructorId;
   const [searchParams, setSearchParams] = useSearchParams();
@@ -743,7 +742,9 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
 
         {/* Right column: progress/enrollment card */}
         <div className="space-y-6">
-          {refundRequest && <RefundStatusCard refundRequest={refundRequest} />}
+          {refundRequests.length > 0 && (
+            <RefundStatusCard refundRequests={refundRequests} />
+          )}
           <Card className="sticky top-6">
             <CardHeader>
               <h2 className="text-lg font-semibold">
@@ -847,28 +848,38 @@ const REFUND_STATUS_TEXT: Record<RefundStatus, string> = {
   [RefundStatus.Declined]: "Your refund request was declined.",
 };
 
+/**
+ * The buyer's Refund Requests for this course, newest first. Each has its own
+ * `refund-<id>` anchor, which a `refund_decided` Notification links to.
+ */
 function RefundStatusCard({
-  refundRequest,
+  refundRequests,
 }: {
-  refundRequest: {
-    id: number;
-    status: RefundStatus;
-    decisionNote: string | null;
-  };
+  refundRequests: RefundRequestStatus[];
 }) {
   return (
-    <Card id={`refund-${refundRequest.id}`} className="scroll-mt-20">
+    <Card>
       <CardHeader>
-        <h2 className="text-lg font-semibold">Refund request</h2>
+        <h2 className="text-lg font-semibold">
+          {refundRequests.length === 1 ? "Refund request" : "Refund requests"}
+        </h2>
       </CardHeader>
-      <CardContent className="space-y-2 text-sm">
-        <p>{REFUND_STATUS_TEXT[refundRequest.status]}</p>
-        {refundRequest.decisionNote && (
-          <p className="rounded-md bg-muted p-2">
-            <span className="font-medium">Our note: </span>
-            {refundRequest.decisionNote}
-          </p>
-        )}
+      <CardContent className="space-y-4 text-sm">
+        {refundRequests.map((refundRequest) => (
+          <div
+            key={refundRequest.id}
+            id={`refund-${refundRequest.id}`}
+            className="scroll-mt-20 space-y-2"
+          >
+            <p>{REFUND_STATUS_TEXT[refundRequest.status]}</p>
+            {refundRequest.decisionNote && (
+              <p className="rounded-md bg-muted p-2">
+                <span className="font-medium">Our note: </span>
+                {refundRequest.decisionNote}
+              </p>
+            )}
+          </div>
+        ))}
       </CardContent>
     </Card>
   );

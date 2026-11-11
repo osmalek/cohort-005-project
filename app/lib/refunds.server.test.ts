@@ -7,7 +7,7 @@ import {
   approveRefundRequest,
   checkRefundRequest,
   declineRefundRequest,
-  getLatestRefundRequestForCourse,
+  listRefundRequestsForCourse,
   getRefundOffer,
   getSeatAvailability,
   listRefundRequestsForBuyer,
@@ -264,7 +264,7 @@ describe("the refund offer on the course page", () => {
 });
 
 describe("the refund status on the course page", () => {
-  it("shows the buyer's newest Refund Request for the course with its note", () => {
+  it("lists every Refund Request the buyer raised for the course, newest first, with notes", () => {
     const purchase = buyForSelf(base.user.id);
     const first = raise(purchase.id, base.user.id);
     declineRefundRequest(db, first, platformAdmin.id, "Past half way.", NOW);
@@ -272,20 +272,37 @@ describe("the refund status on the course page", () => {
     approveRefundRequest(db, second, platformAdmin.id, "Sorry it did not fit.", NOW);
 
     expect(
-      getLatestRefundRequestForCourse(db, base.user.id, base.course.id)
-    ).toEqual({
-      id: second,
-      status: RefundStatus.Approved,
-      decisionNote: "Sorry it did not fit.",
-    });
+      listRefundRequestsForCourse(db, base.user.id, base.course.id)
+    ).toEqual([
+      {
+        id: second,
+        status: RefundStatus.Approved,
+        decisionNote: "Sorry it did not fit.",
+      },
+      { id: first, status: RefundStatus.Declined, decisionNote: "Past half way." },
+    ]);
+  });
+
+  it("has an entry for every refund_decided link, not just the newest", () => {
+    const purchase = buyForSelf(base.user.id);
+    declineRefundRequest(db, raise(purchase.id, base.user.id), platformAdmin.id, "No.", NOW);
+    declineRefundRequest(db, raise(purchase.id, base.user.id), platformAdmin.id, "Still no.", NOW);
+
+    const anchors = listRefundRequestsForCourse(db, base.user.id, base.course.id).map(
+      (r) => `/courses/test-course#refund-${r.id}`
+    );
+    const links = listUnreadNotifications(db, base.user.id).map((n) => n.href);
+
+    expect(links).toHaveLength(2);
+    expect(anchors).toEqual(expect.arrayContaining(links));
   });
 
   it("shows nothing to someone with no Refund Request", () => {
     buyForSelf(base.user.id);
 
-    expect(
-      getLatestRefundRequestForCourse(db, base.user.id, base.course.id)
-    ).toBeNull();
+    expect(listRefundRequestsForCourse(db, base.user.id, base.course.id)).toEqual(
+      []
+    );
   });
 });
 
@@ -550,6 +567,7 @@ describe("refund_decided Notifications", () => {
         href: `/courses/test-course#refund-${id}`,
         createdAt: NOW.toISOString(),
         readAt: null,
+        hiddenAt: null,
       },
     ]);
   });
@@ -566,7 +584,21 @@ describe("refund_decided Notifications", () => {
         text: "Your refund request for Test Course was declined: You finished the course.",
         href: `/courses/test-course#refund-${id}`,
         readAt: null,
+        hiddenAt: null,
       },
+    ]);
+  });
+
+  it.each([
+    ["a full stop", "Past half way."],
+    ["an exclamation mark", "Past half way!"],
+    ["a question mark", "Did you finish it?"],
+  ])("does not add a second full stop to a note ending in %s", (_, note) => {
+    const purchase = buyForSelf(base.user.id);
+    declineRefundRequest(db, raise(purchase.id, base.user.id), platformAdmin.id, note, NOW);
+
+    expect(listUnreadNotifications(db, base.user.id)).toMatchObject([
+      { text: `Your refund request for Test Course was declined: ${note}` },
     ]);
   });
 

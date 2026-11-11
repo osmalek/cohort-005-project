@@ -1,19 +1,28 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createUnreadCountPoller } from "./unread-count-poller";
 
-// A stand-in for `document`'s visibility: tests flip it and fire the event.
+// A stand-in for `document`'s visibility and the window's focus: tests flip
+// visibility, or focus the window, and fire the events.
 function fakeVisibility(initiallyVisible = true) {
   let visible = initiallyVisible;
   const listeners = new Set<() => void>();
+  const focusListeners = new Set<() => void>();
   return {
     isVisible: () => visible,
     onChange(listener: () => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    onFocus(listener: () => void) {
+      focusListeners.add(listener);
+      return () => focusListeners.delete(listener);
+    },
     set(next: boolean) {
       visible = next;
       listeners.forEach((l) => l());
+    },
+    focus() {
+      focusListeners.forEach((l) => l());
     },
   };
 }
@@ -100,12 +109,72 @@ describe("unread Notification count poller", () => {
     expect(t.fetchCount).toHaveBeenCalledTimes(2);
   });
 
+  it("refreshes straight away when the window regains focus", async () => {
+    const t = setup({ initialCount: 1 });
+    t.poller.start();
+
+    t.setServerCount(3);
+    t.visibility.focus();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(t.fetchCount).toHaveBeenCalledTimes(1);
+    expect(t.poller.getCount()).toBe(3);
+  });
+
+  it("fetches once when the tab becomes visible and the window gains focus together", async () => {
+    const t = setup();
+    t.poller.start();
+    t.visibility.set(false);
+
+    t.visibility.set(true);
+    await vi.advanceTimersByTimeAsync(0); // the first count has already arrived
+    t.visibility.focus();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(t.fetchCount).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start a second fetch on focus while one is still in flight", async () => {
+    const t = setup();
+    let resolve: (n: number) => void = () => {};
+    t.fetchCount.mockImplementationOnce(
+      () => new Promise<number>((r) => (resolve = r))
+    );
+    t.poller.start();
+    t.visibility.focus();
+    await vi.advanceTimersByTimeAsync(10_000);
+    t.visibility.focus();
+
+    expect(t.fetchCount).toHaveBeenCalledTimes(1);
+    resolve(0);
+  });
+
+  it("refreshes on focus again once the last fetch is a while ago", async () => {
+    const t = setup();
+    t.poller.start();
+    t.visibility.focus();
+    await vi.advanceTimersByTimeAsync(5_000);
+    t.visibility.focus();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(t.fetchCount).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores focus in a hidden tab", async () => {
+    const t = setup({ visible: false });
+    t.poller.start();
+    t.visibility.focus();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.fetchCount).not.toHaveBeenCalled();
+  });
+
   it("stops polling and listening once stopped", async () => {
     const t = setup();
     t.poller.start();
     t.poller.stop();
     t.visibility.set(false);
     t.visibility.set(true);
+    t.visibility.focus();
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     expect(t.fetchCount).not.toHaveBeenCalled();
   });
@@ -123,7 +192,7 @@ describe("unread Notification count poller", () => {
 
   it("ignores a poll response that was in flight when the count changed locally", async () => {
     const t = setup({ initialCount: 3 });
-    let resolve!: (n: number) => void;
+    let resolve: (n: number) => void = () => {};
     t.fetchCount.mockImplementationOnce(
       () => new Promise<number>((r) => (resolve = r))
     );

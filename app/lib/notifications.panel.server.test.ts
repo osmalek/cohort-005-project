@@ -11,6 +11,7 @@ import {
   listUnreadNotifications,
   markNotificationRead,
 } from "./notifications.server";
+import { isOnBell } from "./notification-groups";
 
 // The bell's panel: "See earlier" and Clear (ticket #15).
 
@@ -40,19 +41,27 @@ beforeEach(() => {
     .get().id;
 });
 
+/** The id of a Notification the test expects to have been written. */
+function written(row: { id: number } | null): number {
+  if (!row) throw new Error("Expected a Notification to be written");
+  return row.id;
+}
+
 /** One Notification of `kind` for the Student, created at `at`. */
 function notify(kind: NotificationKind, at: Date): number {
-  return createNotification(
-    db,
-    {
-      recipientId: base.user.id,
-      kind,
-      actorId: base.instructor.id,
-      courseId: base.course.id,
-      lessonId,
-    },
-    at
-  )!.id;
+  return written(
+    createNotification(
+      db,
+      {
+        recipientId: base.user.id,
+        kind,
+        actorId: base.instructor.id,
+        courseId: base.course.id,
+        lessonId,
+      },
+      at
+    )
+  );
 }
 
 const ids = (views: { id: number }[]) => views.map((n) => n.id);
@@ -156,19 +165,33 @@ describe("Clear", () => {
     ]);
   });
 
+  it("marks a cleared Notification in See earlier as cleared, so opening it does not lower the count again", () => {
+    const cleared = notify(NotificationKind.CommentReply, NOW);
+    clearNotifications(db, base.user.id, "all", minutesLater(5));
+
+    expect(listEarlierNotifications(db, base.user.id)).toMatchObject([
+      { id: cleared, readAt: null, hiddenAt: minutesLater(5).toISOString() },
+    ]);
+    expect(
+      listEarlierNotifications(db, base.user.id).filter(isOnBell)
+    ).toHaveLength(countUnreadNotifications(db, base.user.id));
+  });
+
   it("leaves a cleared Notification openable, and other users' bells alone", () => {
     const mine = notify(NotificationKind.CommentReply, NOW);
-    const theirs = createNotification(
-      db,
-      {
-        recipientId: base.instructor.id,
-        kind: NotificationKind.CommentReply,
-        actorId: base.user.id,
-        courseId: base.course.id,
-        lessonId,
-      },
-      NOW
-    )!.id;
+    const theirs = written(
+      createNotification(
+        db,
+        {
+          recipientId: base.instructor.id,
+          kind: NotificationKind.CommentReply,
+          actorId: base.user.id,
+          courseId: base.course.id,
+          lessonId,
+        },
+        NOW
+      )
+    );
 
     clearNotifications(db, base.user.id, "all", minutesLater(5));
 

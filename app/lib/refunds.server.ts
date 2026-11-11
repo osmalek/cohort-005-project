@@ -1,7 +1,6 @@
 import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
-import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
+import type { Db, Queryable } from "~/db/types";
 import { alias } from "drizzle-orm/sqlite-core";
-import * as schema from "~/db/schema";
 import {
   coupons,
   courses,
@@ -32,10 +31,6 @@ import { notifyRefundDecided } from "~/lib/notifications.server";
 //
 // Every function takes the database first, so tests can hand in an in-memory
 // one. Uses positional parameters (project convention).
-
-export type Db = BetterSQLite3Database<typeof schema>;
-type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
-type Queryable = Db | Tx;
 
 type Purchase = typeof purchases.$inferSelect;
 type Seat = typeof coupons.$inferSelect;
@@ -525,31 +520,35 @@ export function listRefundRequestsForBuyer(db: Queryable, buyerId: number) {
     }));
 }
 
+/** A Refund Request as the course page shows it to its buyer. */
+export type RefundRequestStatus = {
+  id: number;
+  status: RefundStatus;
+  decisionNote: string | null;
+};
+
 /**
- * The buyer's newest Refund Request on any of their Purchases of a course, for
- * the refund status on the course page (where a `refund_decided` Notification
- * links to).
+ * Every Refund Request the buyer raised on any of their Purchases of a
+ * course, newest first, for the refund status on the course page. Each one a
+ * `refund_decided` Notification can link to (`#refund-<id>`) is listed, not
+ * only the newest.
  */
-export function getLatestRefundRequestForCourse(
+export function listRefundRequestsForCourse(
   db: Queryable,
   buyerId: number,
   courseId: number
-): { id: number; status: RefundStatus; decisionNote: string | null } | null {
-  return (
-    db
-      .select({
-        id: refunds.id,
-        status: refunds.status,
-        decisionNote: refunds.decisionNote,
-      })
-      .from(refunds)
-      .innerJoin(purchases, eq(refunds.purchaseId, purchases.id))
-      .where(
-        and(eq(purchases.userId, buyerId), eq(purchases.courseId, courseId))
-      )
-      .orderBy(desc(refunds.requestedAt), desc(refunds.id))
-      .get() ?? null
-  );
+): RefundRequestStatus[] {
+  return db
+    .select({
+      id: refunds.id,
+      status: refunds.status,
+      decisionNote: refunds.decisionNote,
+    })
+    .from(refunds)
+    .innerJoin(purchases, eq(refunds.purchaseId, purchases.id))
+    .where(and(eq(purchases.userId, buyerId), eq(purchases.courseId, courseId)))
+    .orderBy(desc(refunds.requestedAt), desc(refunds.id))
+    .all();
 }
 
 /** A Team Admin's Team Licences, with what the team page needs to refund one. */

@@ -53,6 +53,7 @@ describe("instructor_question Notifications", () => {
         href: `/instructor/questions#question-${question.id}`,
         createdAt: NOW.toISOString(),
         readAt: null,
+        hiddenAt: null,
       },
     ]);
     expect(listUnreadNotifications(db, base.user.id)).toEqual([]);

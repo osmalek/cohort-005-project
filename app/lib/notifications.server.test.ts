@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { createTestDb, seedBaseData } from "~/test/setup";
 import * as schema from "~/db/schema";
-import { createComment } from "./comments.server";
+import { createComment, deleteComment } from "./comments.server";
 import {
   countUnreadNotifications,
+  listEarlierNotifications,
   listUnreadNotifications,
   markNotificationRead,
 } from "./notifications.server";
@@ -53,6 +54,7 @@ describe("comment_reply Notifications", () => {
         href: `/courses/test-course/lessons/${lessonId}#comment-${reply.id}`,
         createdAt: NOW.toISOString(),
         readAt: null,
+        hiddenAt: null,
       },
     ]);
     expect(listUnreadNotifications(db, base.instructor.id)).toEqual([]);
@@ -64,6 +66,25 @@ describe("comment_reply Notifications", () => {
 
     expect(listUnreadNotifications(db, base.user.id)).toEqual([]);
     expect(countUnreadNotifications(db, base.user.id)).toBe(0);
+  });
+
+  it("deleting the reply takes its Notification off the bell and out of See earlier", () => {
+    const question = createComment(db, base.user.id, lessonId, null, "Why?");
+    const reply = createComment(
+      db,
+      base.instructor.id,
+      lessonId,
+      question.id,
+      "Because.",
+      NOW
+    );
+    expect(countUnreadNotifications(db, base.user.id)).toBe(1);
+
+    deleteComment(db, reply.id, base.instructor.id, true, NOW);
+
+    expect(listUnreadNotifications(db, base.user.id)).toEqual([]);
+    expect(countUnreadNotifications(db, base.user.id)).toBe(0);
+    expect(listEarlierNotifications(db, base.user.id)).toEqual([]);
   });
 
   it("creates nothing when the reply is rejected", () => {

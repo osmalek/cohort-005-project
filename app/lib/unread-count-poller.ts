@@ -2,7 +2,10 @@
 //
 // - Polls `fetchCount` every `intervalMs` while the tab is visible.
 // - Makes no requests while the tab is hidden.
-// - Refreshes straight away when the tab becomes visible again.
+// - Refreshes straight away when the tab becomes visible again, or when the
+//   window regains focus. Switching back to a tab usually fires both at once,
+//   so a refresh from either is skipped while a fetch is in flight or one
+//   started within the last `EVENT_REFRESH_DEDUPE_MS`.
 // - `adjust`/`set` apply local changes (mark-read, Clear) immediately. A poll
 //   that was already in flight when the count changed locally is discarded,
 //   so a stale server answer cannot undo them.
@@ -10,10 +13,15 @@
 // Framework-free so it can be tested with fake timers. The React wrapper is
 // app/hooks/use-unread-notification-count.tsx.
 
+/** How close together a visibility and a focus refresh count as one. */
+export const EVENT_REFRESH_DEDUPE_MS = 2_000;
+
 export interface VisibilitySource {
   isVisible(): boolean;
   /** Subscribe to visibility changes; returns an unsubscribe function. */
   onChange(listener: () => void): () => void;
+  /** Subscribe to the window regaining focus; returns an unsubscribe function. */
+  onFocus(listener: () => void): () => void;
 }
 
 export interface UnreadCountPollerOptions {
@@ -36,13 +44,20 @@ export interface UnreadCountPoller {
   getCount(): number;
 }
 
-/** The browser's `document` as a VisibilitySource. */
-export function documentVisibility(doc: Document = document): VisibilitySource {
+/** The browser's `document` and `window` as a VisibilitySource. */
+export function documentVisibility(
+  doc: Document = document,
+  win: Window = window
+): VisibilitySource {
   return {
     isVisible: () => doc.visibilityState === "visible",
     onChange(listener) {
       doc.addEventListener("visibilitychange", listener);
       return () => doc.removeEventListener("visibilitychange", listener);
+    },
+    onFocus(listener) {
+      win.addEventListener("focus", listener);
+      return () => win.removeEventListener("focus", listener);
     },
   };
 }
@@ -55,7 +70,9 @@ export function createUnreadCountPoller(
   // poll started after the latest local change may write the count.
   let generation = 0;
   let timer: ReturnType<typeof setInterval> | null = null;
-  let unsubscribe: (() => void) | null = null;
+  let unsubscribers: (() => void)[] = [];
+  let inFlight = 0;
+  let lastFetchStartedAt = Number.NEGATIVE_INFINITY;
 
   const write = (next: number) => {
     next = Math.max(0, next);
@@ -74,19 +91,33 @@ export function createUnreadCountPoller(
   function refresh() {
     if (!opts.visibility.isVisible()) return;
     const mine = ++generation;
-    opts.fetchCount().then(
-      (n) => {
-        if (mine === generation && n !== count) write(n);
-      },
-      () => {
-        // Keep the last known count; the next poll will try again.
-      }
-    );
+    inFlight++;
+    lastFetchStartedAt = Date.now();
+    opts
+      .fetchCount()
+      .then(
+        (n) => {
+          if (mine === generation && n !== count) write(n);
+        },
+        () => {
+          // Keep the last known count; the next poll will try again.
+        }
+      )
+      .finally(() => {
+        inFlight--;
+      });
   }
+
+  /** A refresh triggered by the tab coming back; deduped (see the header). */
+  const refreshOnReturn = () => {
+    if (inFlight > 0) return;
+    if (Date.now() - lastFetchStartedAt < EVENT_REFRESH_DEDUPE_MS) return;
+    refresh();
+  };
 
   const onVisibilityChange = () => {
     if (opts.visibility.isVisible()) {
-      refresh();
+      refreshOnReturn();
       startTimer();
     } else {
       stopTimer();
@@ -95,14 +126,17 @@ export function createUnreadCountPoller(
 
   return {
     start() {
-      if (unsubscribe) return;
-      unsubscribe = opts.visibility.onChange(onVisibilityChange);
+      if (unsubscribers.length > 0) return;
+      unsubscribers = [
+        opts.visibility.onChange(onVisibilityChange),
+        opts.visibility.onFocus(refreshOnReturn),
+      ];
       if (opts.visibility.isVisible()) startTimer();
     },
     stop() {
       stopTimer();
-      unsubscribe?.();
-      unsubscribe = null;
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+      unsubscribers = [];
       generation++;
     },
     refresh,
