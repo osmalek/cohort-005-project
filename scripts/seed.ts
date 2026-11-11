@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { eq, gte, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
+import { and, eq, gte, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
@@ -1899,7 +1899,7 @@ This course is still in draft while the cluster examples are rewritten against t
   });
 
   // Waiting, and stale enough to flag amber in the queue.
-  comment({
+  const c1q2 = comment({
     lessonId: course1LessonIds[7],
     userId: students[2].id,
     body: "Why does this fail to infer? I expected `T` to come out as `string`.\n\n```typescript\nfunction first<T>(items: T[]): T {\n  return items[0];\n}\n\nconst x = first([]);\n```",
@@ -1907,7 +1907,7 @@ This course is still in draft while the cluster examples are rewritten against t
   });
 
   // Waiting, but posted today — should look calm in the queue.
-  comment({
+  const c1q3 = comment({
     lessonId: course1LessonIds[4],
     userId: students[4].id,
     body: "Is there a reason to prefer `interface` over `type` here, or is it purely style?",
@@ -1962,7 +1962,7 @@ This course is still in draft while the cluster examples are rewritten against t
   });
 
   // Course 2: waiting a long time.
-  comment({
+  const c2q1 = comment({
     lessonId: course2LessonIds[2],
     userId: students[3].id,
     body: "When would you return a 422 instead of a 400? The distinction still isn't clicking for me.",
@@ -2018,6 +2018,59 @@ This course is still in draft while the cluster examples are rewritten against t
   replyNotification(c1q4Reply, students[1].id, course1.id, null);
   replyNotification(c1q5Answer, students[1].id, course1.id, daysAgo(38));
   replyNotification(c2q2Answer, students[2].id, course2.id, null);
+
+  // An instructor_question Notification to the owning Instructor for each
+  // student question above. Answered ones were marked read by the answer;
+  // the deleted one is hidden, as deleting a question does.
+  function questionNotification(
+    question: typeof schema.comments.$inferSelect,
+    instructorId: number,
+    courseId: number,
+    state: { readAt?: string; hiddenAt?: string } = {}
+  ) {
+    db.insert(schema.notifications)
+      .values({
+        recipientId: instructorId,
+        kind: NotificationKind.InstructorQuestion,
+        actorId: question.userId,
+        courseId,
+        lessonId: question.lessonId,
+        commentId: question.id,
+        readAt: state.readAt ?? null,
+        hiddenAt: state.hiddenAt ?? null,
+        createdAt: question.createdAt,
+      })
+      .run();
+  }
+  questionNotification(c1q1, instructor1.id, course1.id, { readAt: daysAgo(29) });
+  questionNotification(c1q2, instructor1.id, course1.id);
+  questionNotification(c1q3, instructor1.id, course1.id);
+  questionNotification(c1q4, instructor1.id, course1.id);
+  questionNotification(c1q5, instructor1.id, course1.id, { readAt: daysAgo(39) });
+  questionNotification(c1q6, instructor1.id, course1.id, { hiddenAt: daysAgo(12) });
+  questionNotification(c2q1, instructor2.id, course2.id);
+  questionNotification(c2q2, instructor2.id, course2.id, { readAt: daysAgo(13) });
+
+  // A new_lesson Notification for everyone enrolled in course 1 about its
+  // newest lesson, as if it had been added two days ago. Unread.
+  const newestCourse1Lesson = course1LessonIds[course1LessonIds.length - 1];
+  const course1Students = db
+    .select({ userId: schema.enrollments.userId })
+    .from(schema.enrollments)
+    .where(eq(schema.enrollments.courseId, course1.id))
+    .all();
+  for (const { userId } of course1Students) {
+    db.insert(schema.notifications)
+      .values({
+        recipientId: userId,
+        kind: NotificationKind.NewLesson,
+        actorId: instructor1.id,
+        courseId: course1.id,
+        lessonId: newestCourse1Lesson,
+        createdAt: daysAgo(2),
+      })
+      .run();
+  }
 
   console.log(
     `Created ${countRows(schema.comments)} lesson comments across ${countRows(schema.comments, isNull(schema.comments.parentId))} threads.`
@@ -2801,6 +2854,34 @@ This course is still in draft while the cluster examples are rewritten against t
       updatedAt: daysAgo(6),
     })
     .run();
+  // An earlier request, declined, with its refund_decided Notification
+  // (still unread, so the bell's Refunds group has something in it). The
+  // course page lists both requests, so the link lands on this one.
+  const [liamDeclined] = db
+    .insert(schema.refunds)
+    .values({
+      purchaseId: liamPurchase.id,
+      status: RefundStatus.Declined,
+      reason: "Not sure this is for me.",
+      decisionNote:
+        "Have a look at the first module before deciding. If it still isn't right, ask again.",
+      requestedAt: daysAgo(8),
+      resolvedAt: daysAgo(7),
+      resolvedByUserId: admin.id,
+    })
+    .returning()
+    .all();
+  db.insert(schema.notifications)
+    .values({
+      recipientId: liam.id,
+      kind: NotificationKind.RefundDecided,
+      actorId: admin.id,
+      courseId: course1.id,
+      refundId: liamDeclined.id,
+      readAt: null,
+      createdAt: daysAgo(7),
+    })
+    .run();
   db.insert(schema.refunds)
     .values({
       purchaseId: liamPurchase.id,
@@ -2810,7 +2891,7 @@ This course is still in draft while the cluster examples are rewritten against t
     })
     .run();
 
-  console.log("Created Liam's Refund Request.");
+  console.log("Created Liam's Refund Requests (one declined, one open).");
 
   // ─── Marta's Refund Request ───
   // A Team Licence with no Claimed Seats, so a Platform Admin can approve it.
@@ -2870,7 +2951,7 @@ This course is still in draft while the cluster examples are rewritten against t
   console.log(`  Course ratings: ${countRows(schema.courseRatings)}`);
   console.log(`  Lesson comments: ${countRows(schema.comments)}`);
   console.log(
-    `  Notifications: ${countRows(schema.notifications)} (${countRows(schema.notifications, isNull(schema.notifications.readAt))} unread)`
+    `  Notifications: ${countRows(schema.notifications)} (${countRows(schema.notifications, and(isNull(schema.notifications.readAt), isNull(schema.notifications.hiddenAt)))} on the bell)`
   );
   console.log(
     `  Lesson progress: ${countRows(schema.lessonProgress)} (${countRows(schema.lessonProgress, eq(schema.lessonProgress.status, LessonProgressStatus.Completed))} completed)`
