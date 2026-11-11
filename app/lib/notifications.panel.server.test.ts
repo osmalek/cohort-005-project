@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { createTestDb, seedBaseData } from "~/test/setup";
 import * as schema from "~/db/schema";
 import { NotificationKind } from "~/db/schema";
+import { createComment, deleteComment } from "./comments.server";
 import {
   clearNotifications,
   countUnreadNotifications,
@@ -82,6 +83,19 @@ describe("See earlier", () => {
     }
 
     expect(listEarlierNotifications(db, base.user.id)).toHaveLength(60);
+  });
+
+  it("leaves out a Notification whose comment was deleted", () => {
+    const question = createComment(db, base.user.id, lessonId, null, "Why?", NOW);
+    const [notification] = listUnreadNotifications(db, base.instructor.id);
+    markNotificationRead(db, base.instructor.id, notification.id, NOW);
+    expect(ids(listEarlierNotifications(db, base.instructor.id))).toEqual([
+      notification.id,
+    ]);
+
+    deleteComment(db, question.id, base.user.id, false, minutesLater(1));
+
+    expect(listEarlierNotifications(db, base.instructor.id)).toEqual([]);
   });
 
   it("shows only your own Notifications", () => {

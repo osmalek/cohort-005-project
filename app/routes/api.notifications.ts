@@ -10,6 +10,7 @@ import {
   listEarlierNotifications,
   listUnreadNotifications,
   markNotificationRead,
+  pruneReadNotifications,
 } from "~/lib/notifications.server";
 import { CLEAR_TARGETS } from "~/lib/notification-groups";
 
@@ -32,6 +33,7 @@ async function requireUserId(request: Request): Promise<number> {
 
 export async function loader({ request }: Route.LoaderArgs) {
   const userId = await requireUserId(request);
+  pruneReadNotifications(db, new Date()); // no scheduler, so prune lazily
   return {
     unreadCount: countUnreadNotifications(db, userId),
     notifications: listUnreadNotifications(db, userId),
