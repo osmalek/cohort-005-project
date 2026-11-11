@@ -5,11 +5,16 @@ import { cn } from "~/lib/utils";
 import { NotificationKind } from "~/db/schema";
 import type { NotificationView } from "~/lib/notifications.server";
 import type { loader as notificationsLoader } from "~/routes/api.notifications";
+import {
+  UnreadNotificationCountProvider,
+  useUnreadNotificationCount,
+} from "~/hooks/use-unread-notification-count";
 
 // The Notification bell in the top bar (Variant C of the prototype). The
-// count comes from the app layout's loader, so it refreshes whenever the page
-// revalidates (e.g. after marking a Notification read). The list loads from
-// /api/notifications only when the bell is opened.
+// count starts from the app layout's loader and is kept live by
+// UnreadNotificationCountProvider (polls while the tab is visible; local
+// mark-read/Clear update it at once). The list loads from /api/notifications
+// only when the bell is opened.
 
 export const NOTIFICATIONS_ENDPOINT = "/api/notifications";
 
@@ -65,11 +70,15 @@ function NotificationRow({
   onOpen: () => void;
 }) {
   const fetcher = useFetcher();
+  const live = useUnreadNotificationCount();
   return (
     <fetcher.Form
       method="post"
       action={NOTIFICATIONS_ENDPOINT}
-      onSubmit={onOpen}
+      onSubmit={() => {
+        if (!notification.readAt) live?.adjust(-1);
+        onOpen();
+      }}
     >
       <input type="hidden" name="intent" value="mark-read" />
       <input type="hidden" name="notificationId" value={notification.id} />
@@ -87,11 +96,20 @@ function NotificationRow({
   );
 }
 
-export function NotificationBell({ unreadCount }: { unreadCount: number }) {
+export function NotificationBell(props: { unreadCount: number }) {
   const [open, setOpen] = useState(false);
   const close = useCallback(() => setOpen(false), []);
   const ref = useDismiss(open, close);
   const list = useFetcher<typeof notificationsLoader>();
+  const live = useUnreadNotificationCount();
+  const unreadCount = live?.unreadCount ?? props.unreadCount;
+
+  // Opening the panel loads the list, which carries a fresh count too.
+  const listedCount = list.data?.unreadCount;
+  const setLive = live?.set;
+  useEffect(() => {
+    if (listedCount !== undefined) setLive?.(listedCount);
+  }, [listedCount, setLive]);
 
   const toggle = () => {
     if (!open) list.load(NOTIFICATIONS_ENDPOINT);
@@ -146,7 +164,9 @@ export function NotificationBell({ unreadCount }: { unreadCount: number }) {
 export function TopBar({ unreadCount }: { unreadCount: number }) {
   return (
     <div className="sticky top-0 z-30 flex h-14 shrink-0 items-center justify-end border-b bg-background/95 px-6 backdrop-blur">
-      <NotificationBell unreadCount={unreadCount} />
+      <UnreadNotificationCountProvider initialCount={unreadCount}>
+        <NotificationBell unreadCount={unreadCount} />
+      </UnreadNotificationCountProvider>
     </div>
   );
 }
