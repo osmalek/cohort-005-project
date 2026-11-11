@@ -3,6 +3,8 @@ import type { Route } from "./+types/layout.app";
 import { Sidebar } from "~/components/sidebar";
 import { DevUI } from "~/components/dev-ui";
 import { Toaster } from "sonner";
+import { getPrototypeNotifications } from "~/lib/notifications.prototype.server";
+import { useNotificationsPrototype } from "~/components/notifications.prototype";
 import { getCurrentUserId, getDevCountry } from "~/lib/session";
 import { getCountryTierInfo, COUNTRIES } from "~/lib/ppp";
 import { eq, and, or, sql, desc } from "drizzle-orm";
@@ -213,6 +215,8 @@ export async function loader({ request }: Route.LoaderArgs) {
     countryTierInfo,
     countries: COUNTRIES,
     isTeamAdmin: currentUserId ? isTeamAdmin(currentUserId) : false,
+    // PROTOTYPE (issue #5): fake Notifications from real names.
+    protoNotifications: getPrototypeNotifications(currentUserId ?? null),
   };
 }
 
@@ -225,7 +229,9 @@ export default function AppLayout({ loaderData }: Route.ComponentProps) {
     countryTierInfo,
     countries,
     isTeamAdmin: userIsTeamAdmin,
+    protoNotifications,
   } = loaderData;
+  const proto = useNotificationsPrototype(protoNotifications, !!currentUser);
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -233,10 +239,14 @@ export default function AppLayout({ loaderData }: Route.ComponentProps) {
         currentUser={currentUser}
         recentCourses={recentCourses}
         isTeamAdmin={userIsTeamAdmin}
+        headerSlot={proto.sidebarHeader}
+        navSlot={proto.sidebarNav}
       />
       <main className="flex-1 overflow-y-auto">
+        {proto.topBar}
         <Outlet />
       </main>
+      {proto.overlay}
       <DevUI
         users={users}
         currentUser={currentUser}
