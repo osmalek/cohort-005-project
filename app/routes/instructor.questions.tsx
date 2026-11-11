@@ -15,87 +15,10 @@ import { cn, daysSince, formatRelativeTime } from "~/lib/utils";
 import { MAX_COMMENT_LENGTH } from "~/lib/comments";
 import { createComment } from "~/lib/comments.server";
 import { parseFormData } from "~/lib/validation";
+import { getUnansweredQuestions } from "~/lib/questions.server";
 import { db } from "~/db";
-import {
-  comments,
-  courses,
-  lessons,
-  modules,
-  users,
-  UserRole,
-} from "~/db/schema";
-import { eq, ne, or, and, isNull, notExists, sql, desc } from "drizzle-orm";
-import { alias } from "drizzle-orm/sqlite-core";
-
-type QueuedQuestion = {
-  id: number;
-  body: string;
-  createdAt: string;
-  lessonId: number;
-  lessonTitle: string;
-  courseTitle: string;
-  courseSlug: string;
-  authorId: number;
-  authorName: string;
-  authorAvatarUrl: string | null;
-};
-
-function getUnansweredQuestions(instructorId: number | null): QueuedQuestion[] {
-  const author = alias(users, "author");
-  const reply = alias(comments, "reply");
-  const replyAuthor = alias(users, "reply_author");
-
-  // Correlated: matches a live reply, by staff, to the outer question.
-  const staffReply = db
-    .select({ one: sql`1` })
-    .from(reply)
-    .innerJoin(replyAuthor, eq(replyAuthor.id, reply.userId))
-    .where(
-      and(
-        eq(reply.parentId, comments.id),
-        isNull(reply.deletedAt),
-        or(
-          eq(replyAuthor.role, UserRole.Admin),
-          eq(reply.userId, courses.instructorId)
-        )
-      )
-    );
-
-  const conditions = [
-    isNull(comments.parentId),
-    isNull(comments.deletedAt),
-    // Staff asking their own question shouldn't queue up as work for themselves.
-    ne(author.role, UserRole.Admin),
-    ne(comments.userId, courses.instructorId),
-    notExists(staffReply),
-  ];
-
-  if (instructorId !== null) {
-    conditions.push(eq(courses.instructorId, instructorId));
-  }
-
-  return db
-    .select({
-      id: comments.id,
-      body: comments.body,
-      createdAt: comments.createdAt,
-      lessonId: lessons.id,
-      lessonTitle: lessons.title,
-      courseTitle: courses.title,
-      courseSlug: courses.slug,
-      authorId: author.id,
-      authorName: author.name,
-      authorAvatarUrl: author.avatarUrl,
-    })
-    .from(comments)
-    .innerJoin(author, eq(comments.userId, author.id))
-    .innerJoin(lessons, eq(comments.lessonId, lessons.id))
-    .innerJoin(modules, eq(lessons.moduleId, modules.id))
-    .innerJoin(courses, eq(modules.courseId, courses.id))
-    .where(and(...conditions))
-    .orderBy(desc(comments.createdAt), desc(comments.id))
-    .all();
-}
+import { comments, courses, lessons, modules } from "~/db/schema";
+import { eq } from "drizzle-orm";
 
 function getCommentById(commentId: number) {
   return db.select().from(comments).where(eq(comments.id, commentId)).get();
@@ -133,7 +56,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   const { userId, isAdmin } = await requireInstructorOrAdmin(request);
 
   // Admins span every course; instructors see only the courses they own.
-  const questions = getUnansweredQuestions(isAdmin ? null : userId);
+  const questions = getUnansweredQuestions(db, isAdmin ? null : userId);
 
   const rendered = await Promise.all(
     questions.map(async (question) => ({
@@ -206,7 +129,8 @@ function QuestionCard({ question }: { question: Question }) {
   }, [fetcher.state, fetcher.data]);
 
   return (
-    <Card>
+    // Notifications link here as /instructor/questions#question-<id>.
+    <Card id={`question-${question.id}`} className="scroll-mt-6">
       <CardContent className="p-6">
         <div className="mb-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
           <span className="font-medium text-foreground">

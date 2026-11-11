@@ -1,4 +1,4 @@
-import { and, count, desc, eq, isNull } from "drizzle-orm";
+import { and, count, desc, eq, isNull, lt } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import * as schema from "~/db/schema";
@@ -101,6 +101,134 @@ export function notifyCommentWritten(
       now
     );
   }
+
+  notifyInstructorOfQuestion(tx, comment, now);
+}
+
+/**
+ * A top-level comment is a question for the Instructor who owns the course
+ * (`instructor_question`). It follows the Questions inbox: comments by an
+ * Admin or by the Instructor themselves are not questions, and replies never
+ * notify the Instructor. A live staff reply answers the question, so it marks
+ * the question's Notification read.
+ */
+function notifyInstructorOfQuestion(
+  tx: Queryable,
+  comment: typeof comments.$inferSelect,
+  now: Date
+): void {
+  const course = tx
+    .select({ id: courses.id, instructorId: courses.instructorId })
+    .from(lessons)
+    .innerJoin(schema.modules, eq(lessons.moduleId, schema.modules.id))
+    .innerJoin(courses, eq(schema.modules.courseId, courses.id))
+    .where(eq(lessons.id, comment.lessonId))
+    .get();
+  if (!course) return;
+
+  const author = tx
+    .select({ role: users.role })
+    .from(users)
+    .where(eq(users.id, comment.userId))
+    .get();
+  if (!author) return;
+  const isStaff =
+    author.role === schema.UserRole.Admin ||
+    comment.userId === course.instructorId;
+
+  if (comment.parentId !== null) {
+    if (isStaff) {
+      tx.update(notifications)
+        .set({ readAt: now.toISOString() })
+        .where(
+          and(
+            eq(notifications.kind, NotificationKind.InstructorQuestion),
+            eq(notifications.commentId, comment.parentId),
+            isNull(notifications.readAt)
+          )
+        )
+        .run();
+    }
+    return;
+  }
+
+  if (isStaff) return;
+
+  createNotification(
+    tx,
+    {
+      recipientId: course.instructorId,
+      kind: NotificationKind.InstructorQuestion,
+      actorId: comment.userId,
+      courseId: course.id,
+      lessonId: comment.lessonId,
+      commentId: comment.id,
+    },
+    now
+  );
+}
+
+/**
+ * Called by the comment delete path, inside its transaction. A deleted
+ * question leaves the Questions inbox, so its `instructor_question`
+ * Notification leaves the bell.
+ */
+export function notifyCommentDeleted(
+  tx: Queryable,
+  comment: typeof comments.$inferSelect,
+  now: Date
+): void {
+  tx.update(notifications)
+    .set({ hiddenAt: now.toISOString() })
+    .where(
+      and(
+        eq(notifications.kind, NotificationKind.InstructorQuestion),
+        eq(notifications.commentId, comment.id),
+        isNull(notifications.hiddenAt)
+      )
+    )
+    .run();
+}
+
+/**
+ * Called by the lesson write path, inside its transaction, for every new
+ * lesson. In a Published course, each Student with a current Enrollment gets
+ * a `new_lesson` Notification. Lapsed Students have no Enrollment row, so
+ * they are not recipients. Draft and Archived courses notify nobody.
+ */
+export function notifyLessonCreated(
+  tx: Queryable,
+  lesson: typeof lessons.$inferSelect,
+  actorId: number,
+  now: Date
+): void {
+  const course = tx
+    .select({ id: courses.id, status: courses.status })
+    .from(schema.modules)
+    .innerJoin(courses, eq(schema.modules.courseId, courses.id))
+    .where(eq(schema.modules.id, lesson.moduleId))
+    .get();
+  if (!course || course.status !== schema.CourseStatus.Published) return;
+
+  const enrolled = tx
+    .select({ userId: schema.enrollments.userId })
+    .from(schema.enrollments)
+    .where(eq(schema.enrollments.courseId, course.id))
+    .all();
+
+  for (const { userId } of enrolled) {
+    createNotification(
+      tx,
+      {
+        recipientId: userId,
+        kind: NotificationKind.NewLesson,
+        actorId,
+        courseId: course.id,
+        lessonId: lesson.id,
+      },
+      now
+    );
+  }
 }
 
 function courseIdForLesson(db: Queryable, lessonId: number): number | null {
@@ -153,7 +281,17 @@ function present(row: PresentableRow): { text: string; href: string } {
         text: `${name} replied to your comment on ${lesson}.`,
         href: `${lessonHref}#comment-${n.commentId}`,
       };
-    // instructor_question (#12), new_lesson (#14) and refund_decided (#13)
+    case NotificationKind.InstructorQuestion:
+      return {
+        text: `${name} asked a question on ${lesson}.`,
+        href: `/instructor/questions#question-${n.commentId}`,
+      };
+    case NotificationKind.NewLesson:
+      return {
+        text: `New lesson in ${row.courseTitle ?? "a course"}: ${lesson}.`,
+        href: lessonHref,
+      };
+    // refund_decided (#13)
     // add their cases here.
     default:
       return { text: "You have a new Notification.", href: "/dashboard" };
@@ -233,4 +371,25 @@ export function markNotificationRead(
       .run();
   }
   return present(row).href;
+}
+
+// ─── Pruning ───
+
+/** How long a read Notification is kept after it was read. */
+export const READ_NOTIFICATION_RETENTION_DAYS = 90;
+
+/**
+ * Deletes Notifications read more than 90 days before `now`. Unread ones are
+ * kept however old, cleared or not: only reading starts the clock. There is no
+ * scheduler, so this runs lazily from the bell's endpoint. Returns how many
+ * were deleted.
+ */
+export function pruneReadNotifications(db: Queryable, now: Date): number {
+  const cutoff = new Date(
+    now.getTime() - READ_NOTIFICATION_RETENTION_DAYS * 24 * 60 * 60 * 1000
+  );
+  return db
+    .delete(notifications)
+    .where(lt(notifications.readAt, cutoff.toISOString()))
+    .run().changes;
 }
