@@ -5,17 +5,22 @@ import { db } from "~/db";
 import { getCurrentUserId } from "~/lib/session";
 import { parseFormData } from "~/lib/validation";
 import {
+  clearNotifications,
   countUnreadNotifications,
+  listEarlierNotifications,
   listUnreadNotifications,
   markNotificationRead,
 } from "~/lib/notifications.server";
+import { CLEAR_TARGETS } from "~/lib/notification-groups";
 
 // The bell's data endpoint. Every request is scoped to the signed-in user, so
 // nobody can read or change someone else's Notifications.
 //
-// GET  → { unreadCount, notifications }: loaded when the bell is opened.
+// GET  → { unreadCount, notifications, earlier }: loaded when the bell is
+//        opened. `earlier` is the panel's "See earlier" section.
 // POST → keyed by `intent`:
 //   mark-read  marks one Notification read, then redirects to its target.
+//   clear      hides one group (`target`) or everything ("all") from the bell.
 
 async function requireUserId(request: Request): Promise<number> {
   const userId = await getCurrentUserId(request);
@@ -30,6 +35,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   return {
     unreadCount: countUnreadNotifications(db, userId),
     notifications: listUnreadNotifications(db, userId),
+    earlier: listEarlierNotifications(db, userId),
   };
 }
 
@@ -37,6 +43,10 @@ const actionSchema = z.discriminatedUnion("intent", [
   z.object({
     intent: z.literal("mark-read"),
     notificationId: z.coerce.number().int(),
+  }),
+  z.object({
+    intent: z.literal("clear"),
+    target: z.enum(CLEAR_TARGETS),
   }),
 ]);
 
@@ -57,6 +67,15 @@ export async function action({ request }: Route.ActionArgs) {
       );
       if (!href) throw data("Notification not found", { status: 404 });
       return redirect(href);
+    }
+    case "clear": {
+      const cleared = clearNotifications(
+        db,
+        userId,
+        parsed.data.target,
+        new Date()
+      );
+      return { cleared };
     }
   }
 }

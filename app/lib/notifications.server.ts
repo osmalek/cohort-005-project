@@ -1,4 +1,13 @@
-import { and, count, desc, eq, isNull } from "drizzle-orm";
+import {
+  and,
+  count,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  or,
+} from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import * as schema from "~/db/schema";
@@ -11,6 +20,7 @@ import {
   refunds,
   users,
 } from "~/db/schema";
+import { kindsInGroup, type ClearTarget } from "~/lib/notification-groups";
 
 // ─── Notifications ───
 // Owns every Notification: creating them from the write paths that report an
@@ -201,6 +211,52 @@ export function countUnreadNotifications(db: Queryable, userId: number): number 
       .where(onBell(userId))
       .get()?.n ?? 0
   );
+}
+
+/**
+ * The panel's "See earlier" section: every Notification that has left the
+ * bell, because it was read or cleared, newest first. No count cap; prune
+ * is what bounds it.
+ */
+export function listEarlierNotifications(
+  db: Queryable,
+  userId: number
+): NotificationView[] {
+  return selectForPresentation(db)
+    .where(
+      and(
+        eq(notifications.recipientId, userId),
+        or(isNotNull(notifications.readAt), isNotNull(notifications.hiddenAt))
+      )
+    )
+    .orderBy(desc(notifications.createdAt), desc(notifications.id))
+    .all()
+    .map(toView);
+}
+
+// ─── Clearing ───
+
+/**
+ * Clear in the panel: hides the user's bell Notifications in one group (or
+ * all of them) by setting `hidden_at`. Never deletes, and does not mark them
+ * read; cleared Notifications move to "See earlier". Returns how many were
+ * cleared.
+ */
+export function clearNotifications(
+  db: Queryable,
+  userId: number,
+  target: ClearTarget,
+  now: Date
+): number {
+  const inGroup =
+    target === "all"
+      ? undefined
+      : inArray(notifications.kind, kindsInGroup(target));
+  return db
+    .update(notifications)
+    .set({ hiddenAt: now.toISOString() })
+    .where(and(onBell(userId), inGroup))
+    .run().changes;
 }
 
 // ─── Reading a Notification ───
