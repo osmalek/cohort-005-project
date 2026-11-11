@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { z } from "zod";
 import {
   createUnreadCountPoller,
   documentVisibility,
@@ -38,13 +39,16 @@ export interface UnreadNotificationCount {
 const UnreadNotificationCountContext =
   createContext<UnreadNotificationCount | null>(null);
 
+const unreadCountResponse = z.object({
+  unreadCount: z.number().int().nonnegative(),
+});
+
 async function fetchUnreadCount(): Promise<number> {
   const res = await fetch(NOTIFICATIONS_COUNT_ENDPOINT, {
     headers: { Accept: "application/json" },
   });
   if (!res.ok) throw new Error(`Count request failed: ${res.status}`);
-  const body = (await res.json()) as { unreadCount: number };
-  return body.unreadCount;
+  return unreadCountResponse.parse(await res.json()).unreadCount;
 }
 
 export function UnreadNotificationCountProvider({

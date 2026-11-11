@@ -1,6 +1,5 @@
 import { eq } from "drizzle-orm";
-import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import * as schema from "~/db/schema";
+import type { Queryable } from "~/db/types";
 import { comments, courses, lessons, modules } from "~/db/schema";
 import { MAX_COMMENT_LENGTH, MIN_COMMENT_LENGTH } from "~/lib/comments";
 import {
@@ -15,10 +14,6 @@ import {
 // Every function takes the database first, so tests can hand in an in-memory
 // one. Writes run in a transaction so side effects of a new comment (such as
 // Notifications) can join the same write.
-
-export type Db = BetterSQLite3Database<typeof schema>;
-type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
-export type Queryable = Db | Tx;
 
 export type Comment = typeof comments.$inferSelect;
 
@@ -101,7 +96,7 @@ export function createComment(
 
 /**
  * Soft-deletes a comment. Its author may delete it, and so may staff (the
- * course's Instructor or an Admin; the caller decides `isStaff`). Deleting an
+ * course's Instructor or a Platform Admin; the caller decides `isStaff`). Deleting an
  * already-deleted comment changes nothing. Throws an Error with a
  * user-facing message when the delete is not allowed.
  *

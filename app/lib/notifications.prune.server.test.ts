@@ -29,7 +29,7 @@ beforeEach(() => {
 
 /** A Notification for the student, created `createdDaysAgo` days before NOW. */
 function notify(createdDaysAgo: number): number {
-  return createNotification(
+  const row = createNotification(
     db,
     {
       recipientId: base.user.id,
@@ -38,7 +38,9 @@ function notify(createdDaysAgo: number): number {
       courseId: base.course.id,
     },
     daysBefore(createdDaysAgo)
-  )!.id;
+  );
+  if (!row) throw new Error("Expected a Notification to be written");
+  return row.id;
 }
 
 function readOn(id: number, daysAgo: number) {

@@ -1,6 +1,5 @@
 import { eq, sql } from "drizzle-orm";
-import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import * as schema from "~/db/schema";
+import type { Queryable } from "~/db/types";
 import { lessons } from "~/db/schema";
 import { notifyLessonCreated } from "~/lib/notifications.server";
 
@@ -8,10 +7,6 @@ import { notifyLessonCreated } from "~/lib/notifications.server";
 // The one place lessons are created. Takes the database first, so tests can
 // hand in an in-memory one, and runs in a transaction so the Notifications a
 // new lesson triggers are written with it.
-
-export type Db = BetterSQLite3Database<typeof schema>;
-type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
-export type Queryable = Db | Tx;
 
 export type Lesson = typeof lessons.$inferSelect;
 
@@ -28,12 +23,12 @@ export function createLesson(
   now: Date = new Date()
 ): Lesson {
   return db.transaction((tx) => {
-    const position =
-      tx
-        .select({ max: sql<number>`coalesce(max(${lessons.position}), 0)` })
-        .from(lessons)
-        .where(eq(lessons.moduleId, moduleId))
-        .get()!.max + 1;
+    const last = tx
+      .select({ max: sql<number>`coalesce(max(${lessons.position}), 0)` })
+      .from(lessons)
+      .where(eq(lessons.moduleId, moduleId))
+      .get();
+    const position = (last?.max ?? 0) + 1;
 
     const lesson = tx
       .insert(lessons)

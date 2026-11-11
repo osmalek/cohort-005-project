@@ -2,7 +2,7 @@ import { data, redirect } from "react-router";
 import { z } from "zod";
 import type { Route } from "./+types/api.notifications";
 import { db } from "~/db";
-import { getCurrentUserId } from "~/lib/session";
+import { requireUserId } from "~/lib/access.server";
 import { parseFormData } from "~/lib/validation";
 import {
   clearNotifications,
@@ -22,14 +22,6 @@ import { CLEAR_TARGETS } from "~/lib/notification-groups";
 // POST → keyed by `intent`:
 //   mark-read  marks one Notification read, then redirects to its target.
 //   clear      hides one group (`target`) or everything ("all") from the bell.
-
-async function requireUserId(request: Request): Promise<number> {
-  const userId = await getCurrentUserId(request);
-  if (!userId) {
-    throw data("Select a user from the DevUI panel", { status: 401 });
-  }
-  return userId;
-}
 
 export async function loader({ request }: Route.LoaderArgs) {
   const userId = await requireUserId(request);

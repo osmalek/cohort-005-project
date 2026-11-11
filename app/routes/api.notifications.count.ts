@@ -1,7 +1,6 @@
-import { data } from "react-router";
 import type { Route } from "./+types/api.notifications.count";
 import { db } from "~/db";
-import { getCurrentUserId } from "~/lib/session";
+import { requireUserId } from "~/lib/access.server";
 import { countUnreadNotifications } from "~/lib/notifications.server";
 
 // GET → { unreadCount } for the signed-in user. Polled by the bell every 60s
@@ -9,9 +8,6 @@ import { countUnreadNotifications } from "~/lib/notifications.server";
 // it never loads the Notification list.
 
 export async function loader({ request }: Route.LoaderArgs) {
-  const userId = await getCurrentUserId(request);
-  if (!userId) {
-    throw data("Select a user from the DevUI panel", { status: 401 });
-  }
+  const userId = await requireUserId(request);
   return { unreadCount: countUnreadNotifications(db, userId) };
 }

@@ -1,7 +1,15 @@
-import { and, desc, eq, isNull, ne, notExists, or, sql } from "drizzle-orm";
-import { alias } from "drizzle-orm/sqlite-core";
-import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import * as schema from "~/db/schema";
+import {
+  and,
+  desc,
+  eq,
+  isNull,
+  not,
+  notExists,
+  sql,
+  type SQL,
+} from "drizzle-orm";
+import { alias, type SQLiteColumn } from "drizzle-orm/sqlite-core";
+import type { Queryable } from "~/db/types";
 import {
   comments,
   courses,
@@ -13,10 +21,6 @@ import {
 
 // ─── Questions ───
 // What counts as an unanswered question for the Questions inbox.
-
-export type Db = BetterSQLite3Database<typeof schema>;
-type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
-export type Queryable = Db | Tx;
 
 export type QueuedQuestion = {
   id: number;
@@ -32,10 +36,24 @@ export type QueuedQuestion = {
 };
 
 /**
+ * Whether a comment's author is staff on its course: a Platform Admin, or the
+ * course's own Instructor. Staff comments are never questions, and a live
+ * staff reply answers one. The one definition shared by the Questions inbox
+ * and the `instructor_question` Notification, so the two cannot drift.
+ */
+export function isCourseStaff(
+  authorRole: SQLiteColumn,
+  authorId: SQLiteColumn,
+  courseInstructorId: SQLiteColumn
+): SQL<boolean> {
+  return sql<boolean>`(${authorRole} = ${UserRole.Admin} or ${authorId} = ${courseInstructorId})`;
+}
+
+/**
  * The Questions inbox: top-level, live comments by anyone other than staff
- * that no staff member (an Admin, or the course's Instructor) has given a
- * live reply. `instructorId` limits it to that Instructor's courses; null
- * (an Admin) spans every course. Newest first.
+ * that no staff member (a Platform Admin, or the course's Instructor) has
+ * given a live reply. `instructorId` limits it to that Instructor's courses;
+ * null (a Platform Admin) spans every course. Newest first.
  */
 export function getUnansweredQuestions(
   db: Queryable,
@@ -54,10 +72,7 @@ export function getUnansweredQuestions(
       and(
         eq(reply.parentId, comments.id),
         isNull(reply.deletedAt),
-        or(
-          eq(replyAuthor.role, UserRole.Admin),
-          eq(reply.userId, courses.instructorId)
-        )
+        isCourseStaff(replyAuthor.role, reply.userId, courses.instructorId)
       )
     );
 
@@ -65,8 +80,7 @@ export function getUnansweredQuestions(
     isNull(comments.parentId),
     isNull(comments.deletedAt),
     // Staff asking their own question shouldn't queue up as work for themselves.
-    ne(author.role, UserRole.Admin),
-    ne(comments.userId, courses.instructorId),
+    not(isCourseStaff(author.role, comments.userId, courses.instructorId)),
     notExists(staffReply),
   ];
 
