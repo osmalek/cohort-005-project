@@ -103,6 +103,47 @@ export function notifyCommentWritten(
   }
 }
 
+/**
+ * Called by the lesson write path, inside its transaction, for every new
+ * lesson. In a Published course, each Student with a current Enrollment gets
+ * a `new_lesson` Notification. Lapsed Students have no Enrollment row, so
+ * they are not recipients. Draft and Archived courses notify nobody.
+ */
+export function notifyLessonCreated(
+  tx: Queryable,
+  lesson: typeof lessons.$inferSelect,
+  actorId: number,
+  now: Date
+): void {
+  const course = tx
+    .select({ id: courses.id, status: courses.status })
+    .from(schema.modules)
+    .innerJoin(courses, eq(schema.modules.courseId, courses.id))
+    .where(eq(schema.modules.id, lesson.moduleId))
+    .get();
+  if (!course || course.status !== schema.CourseStatus.Published) return;
+
+  const enrolled = tx
+    .select({ userId: schema.enrollments.userId })
+    .from(schema.enrollments)
+    .where(eq(schema.enrollments.courseId, course.id))
+    .all();
+
+  for (const { userId } of enrolled) {
+    createNotification(
+      tx,
+      {
+        recipientId: userId,
+        kind: NotificationKind.NewLesson,
+        actorId,
+        courseId: course.id,
+        lessonId: lesson.id,
+      },
+      now
+    );
+  }
+}
+
 function courseIdForLesson(db: Queryable, lessonId: number): number | null {
   const row = db
     .select({ courseId: schema.modules.courseId })
@@ -152,6 +193,11 @@ function present(row: PresentableRow): { text: string; href: string } {
       return {
         text: `${name} replied to your comment on ${lesson}.`,
         href: `${lessonHref}#comment-${n.commentId}`,
+      };
+    case NotificationKind.NewLesson:
+      return {
+        text: `New lesson in ${row.courseTitle ?? "a course"}: ${lesson}.`,
+        href: lessonHref,
       };
     // instructor_question (#12), new_lesson (#14) and refund_decided (#13)
     // add their cases here.
