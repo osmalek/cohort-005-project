@@ -101,6 +101,93 @@ export function notifyCommentWritten(
       now
     );
   }
+
+  notifyInstructorOfQuestion(tx, comment, now);
+}
+
+/**
+ * A top-level comment is a question for the Instructor who owns the course
+ * (`instructor_question`). It follows the Questions inbox: comments by an
+ * Admin or by the Instructor themselves are not questions, and replies never
+ * notify the Instructor. A live staff reply answers the question, so it marks
+ * the question's Notification read.
+ */
+function notifyInstructorOfQuestion(
+  tx: Queryable,
+  comment: typeof comments.$inferSelect,
+  now: Date
+): void {
+  const course = tx
+    .select({ id: courses.id, instructorId: courses.instructorId })
+    .from(lessons)
+    .innerJoin(schema.modules, eq(lessons.moduleId, schema.modules.id))
+    .innerJoin(courses, eq(schema.modules.courseId, courses.id))
+    .where(eq(lessons.id, comment.lessonId))
+    .get();
+  if (!course) return;
+
+  const author = tx
+    .select({ role: users.role })
+    .from(users)
+    .where(eq(users.id, comment.userId))
+    .get();
+  if (!author) return;
+  const isStaff =
+    author.role === schema.UserRole.Admin ||
+    comment.userId === course.instructorId;
+
+  if (comment.parentId !== null) {
+    if (isStaff) {
+      tx.update(notifications)
+        .set({ readAt: now.toISOString() })
+        .where(
+          and(
+            eq(notifications.kind, NotificationKind.InstructorQuestion),
+            eq(notifications.commentId, comment.parentId),
+            isNull(notifications.readAt)
+          )
+        )
+        .run();
+    }
+    return;
+  }
+
+  if (isStaff) return;
+
+  createNotification(
+    tx,
+    {
+      recipientId: course.instructorId,
+      kind: NotificationKind.InstructorQuestion,
+      actorId: comment.userId,
+      courseId: course.id,
+      lessonId: comment.lessonId,
+      commentId: comment.id,
+    },
+    now
+  );
+}
+
+/**
+ * Called by the comment delete path, inside its transaction. A deleted
+ * question leaves the Questions inbox, so its `instructor_question`
+ * Notification leaves the bell.
+ */
+export function notifyCommentDeleted(
+  tx: Queryable,
+  comment: typeof comments.$inferSelect,
+  now: Date
+): void {
+  tx.update(notifications)
+    .set({ hiddenAt: now.toISOString() })
+    .where(
+      and(
+        eq(notifications.kind, NotificationKind.InstructorQuestion),
+        eq(notifications.commentId, comment.id),
+        isNull(notifications.hiddenAt)
+      )
+    )
+    .run();
 }
 
 function courseIdForLesson(db: Queryable, lessonId: number): number | null {
@@ -153,7 +240,12 @@ function present(row: PresentableRow): { text: string; href: string } {
         text: `${name} replied to your comment on ${lesson}.`,
         href: `${lessonHref}#comment-${n.commentId}`,
       };
-    // instructor_question (#12), new_lesson (#14) and refund_decided (#13)
+    case NotificationKind.InstructorQuestion:
+      return {
+        text: `${name} asked a question on ${lesson}.`,
+        href: `/instructor/questions#question-${n.commentId}`,
+      };
+    // new_lesson (#14) and refund_decided (#13)
     // add their cases here.
     default:
       return { text: "You have a new Notification.", href: "/dashboard" };

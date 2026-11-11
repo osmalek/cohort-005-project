@@ -3,7 +3,10 @@ import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import * as schema from "~/db/schema";
 import { comments, courses, lessons, modules } from "~/db/schema";
 import { MAX_COMMENT_LENGTH, MIN_COMMENT_LENGTH } from "~/lib/comments";
-import { notifyCommentWritten } from "~/lib/notifications.server";
+import {
+  notifyCommentDeleted,
+  notifyCommentWritten,
+} from "~/lib/notifications.server";
 
 // ─── Comments ───
 // The one place comments are written: a Student or Instructor commenting on
@@ -93,5 +96,49 @@ export function createComment(
     notifyCommentWritten(tx, comment, now);
 
     return comment;
+  });
+}
+
+/**
+ * Soft-deletes a comment. Its author may delete it, and so may staff (the
+ * course's Instructor or an Admin; the caller decides `isStaff`). Deleting an
+ * already-deleted comment changes nothing. Throws an Error with a
+ * user-facing message when the delete is not allowed.
+ *
+ * Notifications about the comment are hidden in the same transaction.
+ */
+export function deleteComment(
+  db: Queryable,
+  commentId: number,
+  userId: number,
+  isStaff: boolean,
+  now: Date = new Date()
+): Comment {
+  return db.transaction((tx) => {
+    const existing = tx
+      .select()
+      .from(comments)
+      .where(eq(comments.id, commentId))
+      .get();
+    if (!existing) {
+      throw new Error("Comment not found");
+    }
+    if (existing.userId !== userId && !isStaff) {
+      throw new Error("You can only delete your own comments");
+    }
+    if (existing.deletedAt !== null) {
+      return existing;
+    }
+
+    const deleted = tx
+      .update(comments)
+      .set({ deletedAt: now.toISOString() })
+      .where(eq(comments.id, commentId))
+      .returning()
+      .get();
+
+    notifyCommentDeleted(tx, deleted, now);
+
+    return deleted;
   });
 }
