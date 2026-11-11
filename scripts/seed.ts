@@ -13,6 +13,7 @@ import {
   RefundStatus,
   QuestionType,
   TeamMemberRole,
+  NotificationKind,
 } from "../app/db/schema";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -65,6 +66,7 @@ async function seed() {
 
   // Drop and recreate tables for a clean seed
   sqlite.exec(`
+    DROP TABLE IF EXISTS notifications;
     DROP TABLE IF EXISTS comments;
     DROP TABLE IF EXISTS course_ratings;
     DROP TABLE IF EXISTS video_watch_events;
@@ -1881,7 +1883,7 @@ This course is still in draft while the cluster examples are rewritten against t
     body: "I'm getting `tsc: command not found` when I run the compile step. Did I miss an install somewhere?",
     createdAt: daysAgo(30),
   });
-  comment({
+  const c1q1Answer = comment({
     lessonId: course1LessonIds[2],
     userId: instructor1.id,
     parentId: c1q1.id,
@@ -1919,7 +1921,7 @@ This course is still in draft while the cluster examples are rewritten against t
     body: "Does strict mode change anything about how this example behaves?",
     createdAt: daysAgo(4),
   });
-  comment({
+  const c1q4Reply = comment({
     lessonId: course1LessonIds[3],
     userId: students[0].id,
     parentId: c1q4.id,
@@ -1935,7 +1937,7 @@ This course is still in draft while the cluster examples are rewritten against t
     createdAt: daysAgo(40),
     editedAt: daysAgo(39),
   });
-  comment({
+  const c1q5Answer = comment({
     lessonId: course1LessonIds[0],
     userId: instructor1.id,
     parentId: c1q5.id,
@@ -1974,7 +1976,7 @@ This course is still in draft while the cluster examples are rewritten against t
     body: "Are the example requests in this lesson hitting a real API, or is it all mocked?",
     createdAt: daysAgo(14),
   });
-  comment({
+  const c2q2Answer = comment({
     lessonId: course2LessonIds[0],
     userId: admin.id,
     parentId: c2q2.id,
@@ -1989,6 +1991,33 @@ This course is still in draft while the cluster examples are rewritten against t
     body: "Heads up: the status code table was updated this week to include 418. Refresh if you cached the old one.",
     createdAt: daysAgo(7),
   });
+
+  // ─── Notifications ───
+  // A comment_reply Notification for each reply to someone else's comment
+  // above. Replies the parent's author has since answered count as read.
+  function replyNotification(
+    reply: typeof schema.comments.$inferSelect,
+    parentAuthorId: number,
+    courseId: number,
+    readAt: string | null
+  ) {
+    db.insert(schema.notifications)
+      .values({
+        recipientId: parentAuthorId,
+        kind: NotificationKind.CommentReply,
+        actorId: reply.userId,
+        courseId,
+        lessonId: reply.lessonId,
+        commentId: reply.id,
+        readAt,
+        createdAt: reply.createdAt,
+      })
+      .run();
+  }
+  replyNotification(c1q1Answer, students[0].id, course1.id, daysAgo(29));
+  replyNotification(c1q4Reply, students[1].id, course1.id, null);
+  replyNotification(c1q5Answer, students[1].id, course1.id, daysAgo(38));
+  replyNotification(c2q2Answer, students[2].id, course2.id, null);
 
   console.log(
     `Created ${countRows(schema.comments)} lesson comments across ${countRows(schema.comments, isNull(schema.comments.parentId))} threads.`
@@ -2840,6 +2869,9 @@ This course is still in draft while the cluster examples are rewritten against t
   console.log(`  Enrollments: ${countRows(schema.enrollments)}`);
   console.log(`  Course ratings: ${countRows(schema.courseRatings)}`);
   console.log(`  Lesson comments: ${countRows(schema.comments)}`);
+  console.log(
+    `  Notifications: ${countRows(schema.notifications)} (${countRows(schema.notifications, isNull(schema.notifications.readAt))} unread)`
+  );
   console.log(
     `  Lesson progress: ${countRows(schema.lessonProgress)} (${countRows(schema.lessonProgress, eq(schema.lessonProgress.status, LessonProgressStatus.Completed))} completed)`
   );

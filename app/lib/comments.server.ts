@@ -3,6 +3,7 @@ import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import * as schema from "~/db/schema";
 import { comments, courses, lessons, modules } from "~/db/schema";
 import { MAX_COMMENT_LENGTH, MIN_COMMENT_LENGTH } from "~/lib/comments";
+import { notifyCommentWritten } from "~/lib/notifications.server";
 
 // ─── Comments ───
 // The one place comments are written: a Student or Instructor commenting on
@@ -48,13 +49,16 @@ function lessonExists(db: Queryable, lessonId: number): boolean {
  * otherwise it is a reply, and its parent must be a top-level comment on the
  * same lesson (replies are one level deep). Throws an Error with a
  * user-facing message when the comment is not allowed.
+ *
+ * Notifications the comment triggers are written in the same transaction.
  */
 export function createComment(
   db: Queryable,
   userId: number,
   lessonId: number,
   parentId: number | null,
-  body: string
+  body: string,
+  now: Date = new Date()
 ): Comment {
   const trimmed = assertValidCommentBody(body);
 
@@ -80,10 +84,14 @@ export function createComment(
       }
     }
 
-    return tx
+    const comment = tx
       .insert(comments)
       .values({ userId, lessonId, parentId, body: trimmed })
       .returning()
       .get();
+
+    notifyCommentWritten(tx, comment, now);
+
+    return comment;
   });
 }

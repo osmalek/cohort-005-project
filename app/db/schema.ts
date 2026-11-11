@@ -37,6 +37,13 @@ export enum RefundStatus {
   Declined = "declined",
 }
 
+export enum NotificationKind {
+  CommentReply = "comment_reply",
+  InstructorQuestion = "instructor_question",
+  NewLesson = "new_lesson",
+  RefundDecided = "refund_decided",
+}
+
 export enum TeamMemberRole {
   Admin = "admin",
   Member = "member",
@@ -374,3 +381,54 @@ export const videoWatchEvents = sqliteTable("video_watch_events", {
     .notNull()
     .$defaultFn(() => new Date().toISOString()),
 });
+
+// ─── Notifications ───
+// One row per Notification, for exactly one recipient. The target columns
+// are nullable; each kind fills the ones it needs:
+//   comment_reply       courseId, lessonId, commentId (the reply)
+//   instructor_question courseId, lessonId, commentId (the question)
+//   new_lesson          courseId, lessonId
+//   refund_decided      courseId, refundId
+// Targets cascade on hard delete, since a Notification about something that
+// no longer exists has nowhere to go.
+export const notifications = sqliteTable(
+  "notifications",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    recipientId: integer("recipient_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull().$type<NotificationKind>(),
+    // Who caused it, for the wording ("{Name} replied…"). Null for events
+    // with no person behind them in the wording.
+    actorId: integer("actor_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    courseId: integer("course_id").references(() => courses.id, {
+      onDelete: "cascade",
+    }),
+    lessonId: integer("lesson_id").references(() => lessons.id, {
+      onDelete: "cascade",
+    }),
+    commentId: integer("comment_id").references(() => comments.id, {
+      onDelete: "cascade",
+    }),
+    refundId: integer("refund_id").references(() => refunds.id, {
+      onDelete: "cascade",
+    }),
+    // Null means unread.
+    readAt: text("read_at"),
+    // Set by Clear. Hides it from the bell; never deletes.
+    hiddenAt: text("hidden_at"),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => [
+    index("notifications_recipient_read_idx").on(
+      table.recipientId,
+      table.readAt
+    ),
+    index("notifications_comment_idx").on(table.commentId),
+  ]
+);
